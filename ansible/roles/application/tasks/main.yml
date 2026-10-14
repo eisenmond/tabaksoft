@@ -1,0 +1,130 @@
+---
+- name: Install application build dependencies
+  ansible.builtin.package:
+    name: "{{ ['curl', 'git', 'build-essential'] if ansible_facts['pkg_mgr'] == 'apt' else ['curl', 'git', 'gcc', 'gcc-c++', 'make'] }}"
+    state: present
+
+- name: Create protected deployment configuration directory
+  ansible.builtin.file:
+    path: /etc/mern-basic
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Write deployment metadata
+  ansible.builtin.template:
+    src: bootstrap.env.j2
+    dest: /etc/mern-basic/bootstrap.env
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Write protected deployment secrets
+  ansible.builtin.template:
+    src: secrets.env.j2
+    dest: /etc/mern-basic/secrets.env
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+
+- name: Create API service account
+  ansible.builtin.user:
+    name: "{{ mern_app_user }}"
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+
+- name: Copy application source to deployment directory
+  ansible.posix.synchronize:
+    src: "{{ mern_source_directory }}/"
+    dest: "{{ mern_app_directory }}/"
+    archive: true
+    delete: true
+    rsync_opts:
+      - --exclude=.git
+      - --exclude=node_modules
+      - --exclude=backend/node_modules
+      - --exclude=frontend/node_modules
+      - --exclude=frontend/build
+      - --exclude=backend/.env
+      - --exclude=frontend/.env.production
+  notify: Restart mern-template-api
+
+- name: Write production API environment
+  ansible.builtin.template:
+    src: backend.env.j2
+    dest: "{{ mern_app_directory }}/backend/.env"
+    owner: root
+    group: "{{ mern_app_user }}"
+    mode: '0640'
+  no_log: true
+  notify: Restart mern-template-api
+
+- name: Write frontend production environment
+  ansible.builtin.copy:
+    content: "REACT_APP_API_URL=/api/v1\n"
+    dest: "{{ mern_app_directory }}/frontend/.env.production"
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Restart mern-template-api
+
+- name: Install locked backend dependencies
+  ansible.builtin.command:
+    cmd: npm ci
+    chdir: "{{ mern_app_directory }}/backend"
+  changed_when: true
+  notify: Restart mern-template-api
+
+- name: Install locked frontend dependencies
+  ansible.builtin.command:
+    cmd: npm ci
+    chdir: "{{ mern_app_directory }}/frontend"
+  changed_when: true
+
+- name: Build frontend
+  ansible.builtin.command:
+    cmd: npm run build
+    chdir: "{{ mern_app_directory }}/frontend"
+  changed_when: true
+
+- name: Set application runtime permissions
+  ansible.builtin.file:
+    path: "{{ mern_app_directory }}"
+    owner: root
+    group: "{{ mern_app_user }}"
+    mode: u=rwX,g=rX,o=rX
+    recurse: true
+
+- name: Install API systemd service
+  ansible.builtin.template:
+    src: mern-template-api.service.j2
+    dest: /etc/systemd/system/mern-template-api.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart mern-template-api
+
+- name: Install application stack systemd target
+  ansible.builtin.template:
+    src: mern-basic.target.j2
+    dest: /etc/systemd/system/mern-basic.target
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start API service
+  ansible.builtin.systemd_service:
+    name: mern-template-api
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Enable application stack target
+  ansible.builtin.systemd_service:
+    name: mern-basic.target
+    enabled: true
+    daemon_reload: true

@@ -1,0 +1,107 @@
+---
+- name: Check the existing application deployment
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ mern_app_directory }}/backend/.env"
+    - "{{ mern_app_directory }}/frontend/.env.production"
+    - /etc/systemd/system/mern-template-api.service
+    - /etc/nginx/conf.d/mern-basic.conf
+  register: mern_rebuild_prerequisites
+
+- name: Require an existing application deployment
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: >-
+      {{ item.item }} is missing. Run ansible/site.yml before using the rebuild
+      playbook.
+  loop: "{{ mern_rebuild_prerequisites.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Update application source in the deployment directory
+  ansible.posix.synchronize:
+    src: "{{ mern_source_directory }}/"
+    dest: "{{ mern_app_directory }}/"
+    archive: true
+    delete: true
+    rsync_opts:
+      - --exclude=.git
+      - --exclude=node_modules
+      - --exclude=backend/node_modules
+      - --exclude=frontend/node_modules
+      - --exclude=frontend/build
+      - --exclude=backend/.env
+      - --exclude=frontend/.env.production
+
+- name: Reconcile the browser-facing origin in the preserved backend environment
+  ansible.builtin.lineinfile:
+    path: "{{ mern_app_directory }}/backend/.env"
+    regexp: '^CLIENT_ORIGIN='
+    line: "CLIENT_ORIGIN={{ 'http://localhost' if mern_local_only else 'http://' ~ mern_domain }}"
+    create: false
+
+- name: Reconcile refresh-cookie security for the bundled HTTP site
+  ansible.builtin.lineinfile:
+    path: "{{ mern_app_directory }}/backend/.env"
+    regexp: '^REFRESH_COOKIE_SECURE='
+    line: 'REFRESH_COOKIE_SECURE=false'
+    insertafter: '^CLIENT_ORIGIN='
+    create: false
+
+- name: Install locked backend dependencies
+  ansible.builtin.command:
+    cmd: npm ci
+    chdir: "{{ mern_app_directory }}/backend"
+  changed_when: true
+
+- name: Install locked frontend dependencies
+  ansible.builtin.command:
+    cmd: npm ci
+    chdir: "{{ mern_app_directory }}/frontend"
+  changed_when: true
+
+- name: Rebuild the production frontend
+  ansible.builtin.command:
+    cmd: npm run build
+    chdir: "{{ mern_app_directory }}/frontend"
+  changed_when: true
+
+- name: Restore application runtime permissions
+  ansible.builtin.file:
+    path: "{{ mern_app_directory }}"
+    owner: root
+    group: "{{ mern_app_user }}"
+    mode: u=rwX,g=rX,o=rX
+    recurse: true
+
+- name: Restart the API with the updated code
+  ansible.builtin.systemd_service:
+    name: mern-template-api
+    state: restarted
+
+- name: Verify the rebuilt frontend through Nginx
+  ansible.builtin.uri:
+    url: http://127.0.0.1/
+    headers:
+      Host: "{{ mern_domain }}"
+    return_content: true
+    status_code: 200
+  register: mern_rebuilt_frontend_response
+  retries: 10
+  delay: 2
+  until: "'id=\"root\"' in mern_rebuilt_frontend_response.content"
+
+- name: Verify the rebuilt API through Nginx
+  ansible.builtin.uri:
+    url: http://127.0.0.1/api/v1/health
+    headers:
+      Host: "{{ mern_domain }}"
+    return_content: true
+    status_code: 200
+  register: mern_rebuilt_api_response
+  retries: 10
+  delay: 2
+  until: >-
+    (mern_rebuilt_api_response.json | default({})).get('data', {}).get('status') == 'ok'

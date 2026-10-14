@@ -1,0 +1,96 @@
+---
+- name: Install UFW on Debian-family hosts
+  ansible.builtin.package:
+    name: ufw
+    state: present
+  when:
+    - mern_firewall_enabled | bool
+    - ansible_facts['os_family'] == 'Debian'
+
+- name: Allow SSH through UFW before enabling it
+  community.general.ufw:
+    rule: allow
+    port: "{{ mern_firewall_ssh_port }}"
+    proto: tcp
+  when:
+    - mern_firewall_enabled | bool
+    - ansible_facts['os_family'] == 'Debian'
+
+- name: Allow public HTTP through UFW
+  community.general.ufw:
+    rule: allow
+    port: "{{ mern_firewall_http_port }}"
+    proto: tcp
+  when:
+    - mern_firewall_enabled | bool
+    - not (mern_local_only | bool)
+    - ansible_facts['os_family'] == 'Debian'
+
+- name: Remove public HTTP rule from UFW for local-only deployments
+  community.general.ufw:
+    rule: allow
+    port: "{{ mern_firewall_http_port }}"
+    proto: tcp
+    delete: true
+  when:
+    - mern_firewall_enabled | bool
+    - mern_local_only | bool
+    - ansible_facts['os_family'] == 'Debian'
+
+- name: Enable UFW with incoming traffic denied by default
+  community.general.ufw:
+    state: enabled
+    direction: incoming
+    policy: deny
+  when:
+    - mern_firewall_enabled | bool
+    - ansible_facts['os_family'] == 'Debian'
+
+- name: Install firewalld on Fedora hosts
+  ansible.builtin.package:
+    name: firewalld
+    state: present
+  when:
+    - mern_firewall_enabled | bool
+    - ansible_facts['distribution'] == 'Fedora'
+
+- name: Enable and start firewalld
+  ansible.builtin.systemd_service:
+    name: firewalld
+    enabled: true
+    state: started
+  when:
+    - mern_firewall_enabled | bool
+    - ansible_facts['distribution'] == 'Fedora'
+
+- name: Allow SSH through firewalld
+  ansible.posix.firewalld:
+    port: "{{ mern_firewall_ssh_port }}/tcp"
+    permanent: true
+    immediate: true
+    state: enabled
+  when:
+    - mern_firewall_enabled | bool
+    - ansible_facts['distribution'] == 'Fedora'
+
+- name: Allow public HTTP through firewalld
+  ansible.posix.firewalld:
+    port: "{{ mern_firewall_http_port }}/tcp"
+    permanent: true
+    immediate: true
+    state: enabled
+  when:
+    - mern_firewall_enabled | bool
+    - not (mern_local_only | bool)
+    - ansible_facts['distribution'] == 'Fedora'
+
+- name: Remove public HTTP rule from firewalld for local-only deployments
+  ansible.posix.firewalld:
+    port: "{{ mern_firewall_http_port }}/tcp"
+    permanent: true
+    immediate: true
+    state: disabled
+  when:
+    - mern_firewall_enabled | bool
+    - mern_local_only | bool
+    - ansible_facts['distribution'] == 'Fedora'

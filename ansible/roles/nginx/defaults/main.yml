@@ -1,0 +1,5 @@
+---
+mern_app_directory: /opt/mern-basic
+mern_backend_port: 5000
+mern_domain: localhost
+mern_local_only: true

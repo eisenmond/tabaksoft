@@ -1,0 +1,9 @@
+---
+mern_app_name: mern-basic
+mern_app_directory: /opt/mern-basic
+mern_app_user: mern-template-api
+mern_backend_port: 5000
+mern_source_directory: "{{ playbook_dir }}/.."
+mern_domain: localhost
+mern_local_only: true
+mern_admin_name: Administrator

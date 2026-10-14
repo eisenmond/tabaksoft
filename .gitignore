@@ -1,0 +1,16 @@
+node_modules/
+build/
+coverage/
+.env
+.env.*
+!.env.example
+!frontend/.env.production.example
+*.log
+
+# Local Ansible deployment configuration and Vault secrets.
+ansible/inventory/hosts.yml
+ansible/group_vars/mern_basic.yml
+ansible/group_vars/mern_basic.vault.yml
+ansible/inventory/hosts.yml.*.bak
+ansible/group_vars/mern_basic.yml.*.bak
+ansible/group_vars/mern_basic.vault.yml.*.bak

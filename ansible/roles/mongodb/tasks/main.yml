@@ -1,0 +1,209 @@
+---
+- name: Install MongoDB repository prerequisites on Debian-family hosts
+  ansible.builtin.apt:
+    name: [ca-certificates, curl, gnupg]
+    state: present
+    update_cache: true
+  when: ansible_facts['pkg_mgr'] == 'apt'
+
+- name: Create APT keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: ansible_facts['pkg_mgr'] == 'apt'
+
+- name: Install MongoDB signing key
+  ansible.builtin.shell: |
+    set -o pipefail
+    curl -fsSL https://pgp.mongodb.com/server-{{ mern_mongodb_major }}.asc | gpg --dearmor -o /etc/apt/keyrings/mongodb-server-{{ mern_mongodb_major }}.gpg
+  args:
+    creates: "/etc/apt/keyrings/mongodb-server-{{ mern_mongodb_major }}.gpg"
+    executable: /bin/bash
+  when: ansible_facts['pkg_mgr'] == 'apt'
+
+- name: Configure MongoDB repository on Debian-family hosts
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/mongodb-server-{{ mern_mongodb_major }}.gpg] https://repo.mongodb.org/apt/{{ ansible_facts['distribution'] | lower }} {{ ansible_facts['distribution_release'] }}/mongodb-org/{{ mern_mongodb_major }} {{ 'multiverse' if ansible_facts['distribution'] == 'Ubuntu' else 'main' }}"
+    filename: "mongodb-org-{{ mern_mongodb_major }}"
+  when: ansible_facts['pkg_mgr'] == 'apt'
+
+- name: Configure MongoDB repository on Fedora
+  ansible.builtin.yum_repository:
+    name: "mongodb-org-{{ mern_mongodb_major }}"
+    description: "MongoDB {{ mern_mongodb_major }} Repository"
+    baseurl: "https://repo.mongodb.org/yum/redhat/9/mongodb-org/{{ mern_mongodb_major }}/$basearch/"
+    gpgcheck: true
+    gpgkey: "https://pgp.mongodb.com/server-{{ mern_mongodb_major }}.asc"
+    enabled: true
+  # Fedora 44 reports dnf5 as its package manager. Checking for the older
+  # "dnf" fact skipped this task and left behind a runnable-looking systemd
+  # unit without either MongoDB executable installed.
+  when: ansible_facts['distribution'] == 'Fedora'
+
+- name: Install MongoDB server and shell packages
+  ansible.builtin.package:
+    # mongodb-org is a metapackage. Installing the server explicitly repairs
+    # hosts where the metapackage was retained after mongodb-org-server (and
+    # consequently the mongod systemd unit) was removed.
+    name:
+      - mongodb-org
+      - mongodb-org-server
+      - mongodb-mongosh
+    state: present
+
+- name: Verify the MongoDB executables were installed
+  ansible.builtin.stat:
+    path: "/usr/bin/{{ item }}"
+  loop:
+    - mongod
+    - mongosh
+  register: mern_mongodb_executables
+
+- name: Reinstall MongoDB RPMs when their registered files are missing
+  ansible.builtin.command:
+    argv:
+      - dnf
+      - reinstall
+      - --assumeyes
+      - mongodb-org-server
+      - mongodb-mongosh
+  when:
+    - ansible_facts['distribution'] == 'Fedora'
+    - >-
+      mern_mongodb_executables.results
+      | selectattr('stat.exists', 'equalto', false)
+      | list
+      | length > 0
+  changed_when: true
+
+- name: Check the MongoDB executables after package repair
+  ansible.builtin.stat:
+    path: "/usr/bin/{{ item }}"
+  loop:
+    - mongod
+    - mongosh
+  register: mern_mongodb_executables
+
+- name: Refuse to install a service for a missing MongoDB executable
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.executable
+    fail_msg: >-
+      {{ item.item }} was not installed at /usr/bin/{{ item.item }}. Check the
+      mongodb-org repository and DNF package transaction before retrying.
+  loop: "{{ mern_mongodb_executables.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Install mongod systemd service
+  ansible.builtin.template:
+    src: mongod.service.j2
+    dest: /etc/systemd/system/mongod.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start mongod before user setup
+  ansible.builtin.systemd_service:
+    name: mongod
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Apply pending MongoDB configuration changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for MongoDB local mongosh ping
+  ansible.builtin.command:
+    cmd: >-
+      mongosh --quiet mongodb://127.0.0.1:27017/admin --eval
+      'db.adminCommand({ ping: 1 }).ok'
+  register: mern_mongosh_ping
+  changed_when: false
+  until: mern_mongosh_ping.stdout | trim == '1'
+  retries: 30
+  delay: 1
+
+- name: Check the MongoDB bootstrap user credentials
+  ansible.builtin.command:
+    argv:
+      - mongosh
+      - --quiet
+      - "mongodb://{{ mern_mongodb_bootstrap_user | urlencode }}:{{ mern_mongodb_bootstrap_password | urlencode }}@127.0.0.1:27017/{{ mern_mongodb_database }}?authSource={{ mern_mongodb_database }}"
+      - --eval
+      - >-
+        const s=db.adminCommand({connectionStatus:1});
+        s.ok === 1 && s.authInfo.authenticatedUsers.some((u) =>
+        u.user === {{ mern_mongodb_bootstrap_user | to_json }} &&
+        u.db === {{ mern_mongodb_database | to_json }})
+  register: mern_mongodb_bootstrap_login
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Create the initial MongoDB bootstrap user
+  ansible.builtin.command:
+    argv:
+      - mongosh
+      - --quiet
+      - "mongodb://127.0.0.1:27017/{{ mern_mongodb_database }}"
+      - --eval
+      - >-
+        const d=db.getSiblingDB({{ mern_mongodb_database | to_json }});
+        d.createUser({user:{{ mern_mongodb_bootstrap_user | to_json }},pwd:{{ mern_mongodb_bootstrap_password | to_json }},roles:[{role:'userAdmin',db:{{ mern_mongodb_database | to_json }}}]});
+  when: >-
+    mern_mongodb_bootstrap_login.rc != 0 or
+    mern_mongodb_bootstrap_login.stdout | trim != 'true'
+  no_log: true
+  changed_when: true
+
+- name: Check the MongoDB application user credentials
+  ansible.builtin.command:
+    argv:
+      - mongosh
+      - --quiet
+      - "mongodb://{{ mern_mongodb_user | urlencode }}:{{ mern_mongodb_password | urlencode }}@127.0.0.1:27017/{{ mern_mongodb_database }}?authSource={{ mern_mongodb_database }}"
+      - --eval
+      - >-
+        const s=db.adminCommand({connectionStatus:1});
+        s.ok === 1 && s.authInfo.authenticatedUsers.some((u) =>
+        u.user === {{ mern_mongodb_user | to_json }} &&
+        u.db === {{ mern_mongodb_database | to_json }})
+  register: mern_mongodb_application_login
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Create or update MongoDB application user
+  ansible.builtin.command:
+    argv:
+      - mongosh
+      - --quiet
+      - "mongodb://{{ mern_mongodb_bootstrap_user | urlencode }}:{{ mern_mongodb_bootstrap_password | urlencode }}@127.0.0.1:27017/{{ mern_mongodb_database }}?authSource={{ mern_mongodb_database }}"
+      - --eval
+      - >-
+        const d=db.getSiblingDB({{ mern_mongodb_database | to_json }});
+        if (d.getUser({{ mern_mongodb_user | to_json }})) d.updateUser({{ mern_mongodb_user | to_json }},{pwd:{{ mern_mongodb_password | to_json }},roles:[{role:'readWrite',db:{{ mern_mongodb_database | to_json }}}]});
+        else d.createUser({user:{{ mern_mongodb_user | to_json }},pwd:{{ mern_mongodb_password | to_json }},roles:[{role:'readWrite',db:{{ mern_mongodb_database | to_json }}}]});
+  no_log: true
+  changed_when: true
+  when: >-
+    mern_mongodb_application_login.rc != 0 or
+    mern_mongodb_application_login.stdout | trim != 'true'
+
+- name: Configure MongoDB for local authenticated access
+  ansible.builtin.template:
+    src: mongod.conf.j2
+    dest: /etc/mongod.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart mongod
+
+- name: Apply MongoDB authentication configuration changes
+  ansible.builtin.meta: flush_handlers

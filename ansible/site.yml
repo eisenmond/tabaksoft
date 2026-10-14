@@ -1,0 +1,38 @@
+---
+- name: Deploy mern-basic
+  hosts: mern_basic
+  become: true
+  gather_facts: true
+  pre_tasks:
+    - name: Validate supported host release
+      ansible.builtin.assert:
+        that:
+          - >-
+            (ansible_facts['distribution'] == 'Debian' and ansible_facts['distribution_major_version'] == '12') or
+            (ansible_facts['distribution'] == 'Ubuntu' and ansible_facts['distribution_version'] in ['22.04', '24.04']) or
+            (ansible_facts['distribution'] == 'Fedora' and ansible_facts['distribution_major_version'] in ['40', '41', '42', '44'])
+        fail_msg: >-
+          Supported hosts are Debian 12, Ubuntu 22.04/24.04, and Fedora 40/41/42/44.
+    - name: Require deployment secret variables
+      ansible.builtin.assert:
+        that:
+          - mern_mongodb_password is defined
+          - mern_mongodb_password | length > 0
+          - mern_mongodb_bootstrap_password is defined
+          - mern_mongodb_bootstrap_password | length > 0
+          - mern_jwt_secret is defined
+          - mern_jwt_secret | length >= 32
+          - mern_admin_email is defined
+          - mern_admin_email | length > 0
+          - mern_admin_password is defined
+          - mern_admin_password | length >= 12
+        fail_msg: >-
+          Set the MongoDB credentials, a 32+-character mern_jwt_secret, and the
+          administrator email and 12+-character password through Ansible Vault.
+      no_log: true
+  roles:
+    - nodejs
+    - mongodb
+    - application
+    - firewall
+    - nginx

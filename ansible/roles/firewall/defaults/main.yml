@@ -1,0 +1,4 @@
+---
+mern_firewall_enabled: true
+mern_firewall_ssh_port: 22
+mern_firewall_http_port: 80

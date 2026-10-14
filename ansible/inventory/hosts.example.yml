@@ -1,0 +1,5 @@
+---
+mern_basic:
+  hosts:
+    app.example.com:
+      ansible_user: deploy

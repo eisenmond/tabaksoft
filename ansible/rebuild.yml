@@ -1,0 +1,10 @@
+---
+- name: Rebuild an existing mern-basic deployment
+  hosts: mern_basic
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Run the application rebuild tasks
+      ansible.builtin.include_role:
+        name: application
+        tasks_from: rebuild

@@ -1,0 +1,2 @@
+export function userResponse(user) { return { id: user._id.toString(), name: user.name, email: user.email, role: user.role, status: user.status || "active", emailVerified: Boolean(user.emailVerifiedAt), acceptedTerms: user.acceptedTerms || null, createdAt: user.createdAt, updatedAt: user.updatedAt }; }
+export function projectResponse(project) { return { id: project._id.toString(), ownerId: project.ownerId.toString(), name: project.name, description: project.description, status: project.status, createdAt: project.createdAt, updatedAt: project.updatedAt }; }

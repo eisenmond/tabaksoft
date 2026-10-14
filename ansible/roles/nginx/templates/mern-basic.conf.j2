@@ -1,0 +1,25 @@
+server {
+{% if mern_local_only %}
+    listen 127.0.0.1:80 default_server;
+{% else %}
+    listen 80 default_server;
+    listen [::]:80 default_server;
+{% endif %}
+    # Accept the configured domain and requests made to the host's IP address.
+    server_name {{ mern_domain }} _;
+
+    root {{ mern_app_directory }}/frontend/build;
+    index index.html;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:{{ mern_backend_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        try_files $uri /index.html;
+    }
+}

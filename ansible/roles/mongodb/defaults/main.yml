@@ -1,0 +1,5 @@
+---
+mern_mongodb_major: '8.0'
+mern_mongodb_database: mern_template
+mern_mongodb_user: mern_app
+mern_mongodb_bootstrap_user: mern-basic_bootstrap

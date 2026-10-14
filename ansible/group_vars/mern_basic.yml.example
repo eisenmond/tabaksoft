@@ -1,0 +1,15 @@
+---
+# Non-secret deployment settings. Put secret variables in an Ansible Vault file
+# or inject them from your secret manager; never commit their values.
+mern_domain: app.example.com
+mern_local_only: false
+mern_firewall_enabled: true
+mern_firewall_ssh_port: 22
+mern_firewall_http_port: 80
+mern_mongodb_database: mern_template
+mern_mongodb_user: mern_app
+# mern_mongodb_password: !vault |
+# mern_mongodb_bootstrap_password: !vault |
+# mern_jwt_secret: !vault |
+# mern_admin_email: !vault |
+# mern_admin_password: !vault |
